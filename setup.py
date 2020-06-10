@@ -22,13 +22,13 @@ def _findRequirements():
 requirements = _findRequirements()
 
 # Check for MNIST data dir
-if not os.path.isdir('./data/MNIST'):
-    if os.path.exists('./data/MNIST.zip'):
-        print "Extracting MNIST data..."
-        with zipfile.ZipFile('./data/MNIST.zip', 'r') as z:
+if not os.path.isdir('./data/botdetect'):
+    if os.path.exists('./data/botdetect.zip'):
+        print "Extracting botdetect data..."
+        with zipfile.ZipFile('./data/botdetect.zip', 'r') as z:
             z.extractall('./data/')
     else:
-        raise IOError("Cannot find MNIST dataset zip file.")
+        raise IOError("Cannot find botdetect dataset zip file.")
 
 # Setup C extensions
 dilation_module = Extension(

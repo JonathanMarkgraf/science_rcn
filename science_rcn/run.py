@@ -30,25 +30,17 @@ from science_rcn.learning import train_image
 LOG = logging.getLogger(__name__)
 
 
-def run_experiment(data_dir='data/MNIST',
-                   train_size=20,
-                   test_size=20,
-                   full_test_set=False,
+def run_experiment(data_dir='data/botdetect',
                    pool_shape=(25, 25),
                    perturb_factor=2.,
                    parallel=True,
-                   verbose=False,
-                   seed=5):
+                   verbose=False,):
     """Run MNIST experiments and evaluate results. 
 
     Parameters
     ----------
     data_dir : string
         Dataset directory.
-    train_size, test_size : int
-        MNIST dataset sizes are in increments of 10
-    full_test_set : bool
-        Test on the full MNIST 10k test set.
     pool_shape : (int, int)
         Vertical and horizontal pool shapes.
     perturb_factor : float
@@ -58,8 +50,6 @@ def run_experiment(data_dir='data/MNIST',
         Parallelize over multiple CPUs.
     verbose : bool
         Higher verbosity level.
-    seed : int
-        Random seed used by numpy.random for sampling training set.
     
     Returns
     -------
@@ -74,8 +64,7 @@ def run_experiment(data_dir='data/MNIST',
     num_workers = None if parallel else 1
     pool = Pool(num_workers)
 
-    train_data, test_data = get_mnist_data_iters(
-        data_dir, train_size, test_size, full_test_set, seed=seed)
+    train_data, test_data = get_botdetect_data_iters(data_dir)
 
     LOG.info("Training on {} images...".format(len(train_data)))
     train_partial = partial(train_image,
@@ -91,7 +80,7 @@ def run_experiment(data_dir='data/MNIST',
     # Evaluate result
     correct = 0
     for test_idx, (winner_idx, _) in enumerate(test_results):
-        correct += int(test_data[test_idx][1]) == winner_idx // (train_size // 10)
+        correct += int(test_data[test_idx][1]) == winner_idx // train_size
     print "Total test accuracy = {}".format(float(correct) / len(test_results))
 
     return all_model_factors, test_results
@@ -158,6 +147,84 @@ def get_mnist_data_iters(data_dir, train_size, test_size,
                           num_per_class=None if full_test_set else test_size // 10)
     return train_set, test_set
 
+# returns (traindata, testdata) tuple
+# only works for our cuts and shadowcross folders for now
+def get_botdetect_data_iters(data_dir):
+    if not os.path.isdir(data_dir):
+        raise IOError("Can't find your data dir '{}'".format(data_dir))
+
+    # returns list of (symbolImg, symbol) tuples, imgages are black and white
+    def _clean_and_split_captcha(path, fileName):
+        captchaPath = os.path.join(path, fileName)
+        img = imread(captchaPath, mode="RGB")
+        textColor       = (0, 0, 0)         # black
+        backgroundColor = (255, 255, 255)   # white
+        # turn image to black and white
+        for x in range(img.shape[0]):
+            for y in range(img.shape[1]):
+                # 200 is our arbitrary background color threshold
+                img[x, y] = backgroundColor if img[x, y][0] > 200 else textColor
+        # crop image to text
+        xStart = img.shape[0]
+        yStart = None
+        for y in range(img.shape[1]):
+            for x in range(img.shape[0]):
+                if (pixels[x, y] == textColor):
+                    xStart = x if x < xStart else xStart
+                    yStart = y if yStart is None else yStart
+                    break
+        xEnd = 0
+        yEnd = None
+        for y in range(img.shape[1]-1, -1, -1):
+            for x in range(img.shape[0]-1, -1, -1):
+                if (pixels[x, y] == textColor):
+                    xEnd = x if x > xEnd else xEnd
+                    yEnd = y if yEnd is None else yEnd
+                    break
+        img = img[xStart:xEnd, yStart:yEnd]
+        # split symbols
+        res = []
+        symbolWidth = int(img.shape[0]/6)
+        for i in range(6):      # our captchas contain 6 letters
+            # match dimensions of training data symbols
+            sImg = imresize(img[symbolWidth*i:symbolWidth*(i+1), 0:img.shape[1]], (112, 112))
+            sImg = np.pad(sImg,
+                pad_width=tuple([(p, p) for p in (44, 44)]),
+                mode='constant', constant_values=0)
+            res.append((sImg, fileName[i]))
+        return res
+
+    def _load_train_data(image_dir, get_filenames=False):
+        loaded_data = []
+        for category in sorted(os.listdir(image_dir)):  # category => symbol folder name => symbol
+            cat_path = os.path.join(image_dir, category)
+            if not os.path.isdir(cat_path) or category.startswith('.'):
+                continue
+            
+            samples = sorted(os.listdir(cat_path))
+
+            for fname in samples:
+                filepath = os.path.join(cat_path, fname)
+                # Resize and pad the images to (200, 200)
+                image_arr = imresize(imread(filepath), (112, 112))
+                img = np.pad(image_arr,
+                             pad_width=tuple([(p, p) for p in (44, 44)]),
+                             mode='constant', constant_values=0)
+                loaded_data.append((img, category))
+        return loaded_data
+
+    def _load_test_data(image_dir, get_filenames=False):
+        loaded_data = []
+        for captchaFile in os.listdir(image_dir):
+            samples = _clean_and_split_captcha(image_dir, captchaFile)
+
+            for t in sorted(samples, key=lambda tup: tup[1]):   # sort tuples after symbol/category
+                loaded_data.append(t)
+        return sorted(loaded_data, key=lambda tup: tup[1])
+
+    train_set = _load_train_data(os.path.join(data_dir, 'training'))
+    test_set = _load_test_data(os.path.join(data_dir, 'testing/cut'))
+    return train_set, test_set
 
 if __name__ == '__main__':
     logging.basicConfig()
@@ -220,11 +287,7 @@ if __name__ == '__main__':
         help="Verbosity level.",
     )
     options = parser.parse_args()
-    run_experiment(train_size=options.train_size,
-                   test_size=options.test_size,
-                   full_test_set=options.full_test_set,
-                   pool_shape=(options.pool_shape, options.pool_shape),
+    run_experiment(pool_shape=(options.pool_shape, options.pool_shape),
                    perturb_factor=options.perturb_factor,
-                   seed=options.seed,
                    verbose=options.verbose,
                    parallel=options.parallel)
