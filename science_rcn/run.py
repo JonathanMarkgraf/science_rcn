@@ -27,6 +27,8 @@ from scipy.ndimage import imread
 from science_rcn.inference import test_image
 from science_rcn.learning import train_image
 
+from PIL import Image
+
 LOG = logging.getLogger(__name__)
 
 
@@ -153,45 +155,43 @@ def get_botdetect_data_iters(data_dir):
     if not os.path.isdir(data_dir):
         raise IOError("Can't find your data dir '{}'".format(data_dir))
 
-    # returns list of (symbolImg, symbol) tuples, imgages are black and white
+    # returns list of (symbolImg: nparray, symbol: string) tuples, imgages are black and white
     def _clean_and_split_captcha(path, fileName):
         captchaPath = os.path.join(path, fileName)
-        img = imread(captchaPath, mode="RGB")
-        textColor       = (0, 0, 0)         # black
-        backgroundColor = (255, 255, 255)   # white
-        # turn image to black and white
-        for x in range(img.shape[0]):
-            for y in range(img.shape[1]):
-                # 200 is our arbitrary background color threshold
-                img[x, y] = backgroundColor if img[x, y][0] > 200 else textColor
+        img     = Image.open(captchaPath)
+        img     = img.convert('L')                              # grayscale
+        img     = img.point(lambda x: 0 if x>200 else 255, '1') # map grayscale to black and white
+        img.save("./test.bmp")
+        pixels  = img.load()
         # crop image to text
-        xStart = img.shape[0]
-        yStart = None
-        for y in range(img.shape[1]):
-            for x in range(img.shape[0]):
-                if (pixels[x, y] == textColor):
+        xStart  = img.size[0]
+        yStart  = None
+        for y in range(img.size[1]):
+            for x in range(img.size[0]):
+                if (pixels[x, y] == 0):
                     xStart = x if x < xStart else xStart
                     yStart = y if yStart is None else yStart
                     break
         xEnd = 0
         yEnd = None
-        for y in range(img.shape[1]-1, -1, -1):
-            for x in range(img.shape[0]-1, -1, -1):
-                if (pixels[x, y] == textColor):
+        for y in range(img.size[1]-1, -1, -1):
+            for x in range(img.size[0]-1, -1, -1):
+                if (pixels[x, y] == 0):
                     xEnd = x if x > xEnd else xEnd
                     yEnd = y if yEnd is None else yEnd
                     break
-        img = img[xStart:xEnd, yStart:yEnd]
+        img = img.crop((xStart, yStart, xEnd, yEnd))
         # split symbols
         res = []
-        symbolWidth = int(img.shape[0]/6)
-        for i in range(6):      # our captchas contain 6 letters
+        # +1 pixel width for tolerance
+        symbolWidth = int(img.size[0]/6)
+        # our captchas contain 6 letters
+        for i in range(6):
             # match dimensions of training data symbols
-            sImg = imresize(img[symbolWidth*i:symbolWidth*(i+1), 0:img.shape[1]], (112, 112))
-            sImg = np.pad(sImg,
-                pad_width=tuple([(p, p) for p in (44, 44)]),
-                mode='constant', constant_values=0)
-            res.append((sImg, fileName[i]))
+            sImg = img.crop((symbolWidth*i, 0, symbolWidth*(i+1), img.size[1])).resize((112, 112))
+            bg = Image.new('L', (200, 200), 0)
+            bg.paste(sImg, (int((bg.size[0]-sImg.size[0])/2), int((bg.size[1]-sImg.size[1])/2))) # insert into center
+            res.append((np.array(bg), fileName[i]))
         return res
 
     def _load_train_data(image_dir, get_filenames=False):
