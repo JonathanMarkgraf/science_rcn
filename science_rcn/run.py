@@ -29,6 +29,8 @@ from science_rcn.learning import train_image
 
 from PIL import Image
 import time
+import pickle
+
 
 LOG = logging.getLogger(__name__)
 
@@ -69,90 +71,62 @@ def run_experiment(data_dir='data/botdetect',
 
     train_data, test_data = get_botdetect_data_iters(data_dir)
 
-    LOG.info("Training on {} images...".format(len(train_data)))
-    t0 = time.clock()
-    train_partial = partial(train_image,
-                            perturb_factor=perturb_factor)
-    train_results = pool.map_async(train_partial, [d[0] for d in train_data]).get(9999999)
-    all_model_factors = zip(*train_results)
-    LOG.info("Training took {} minutes".format((time.clock()-t0)/60))
+    if not os.path.exists("./trained.pickle"):
+        LOG.info("Training on {} images...".format(len(train_data)))
+        train_partial = partial(train_image,
+                                perturb_factor=perturb_factor)
+        train_results = pool.map_async(train_partial, [d[0] for d in train_data]).get(9999999)
+        all_model_factors = zip(*train_results)
+        with open('./trained.pickle', 'wb') as f:
+            pickle.dump(all_model_factors, f)
+    else:
+        LOG.info("trained.pickle detected, skipping training")
+        with open('./trained.pickle', 'rb') as f:
+            all_model_factors = pickle.load(f)
 
     LOG.info("Testing on {} images...".format(len(test_data)))
-    t0 = time.clock()
     test_partial = partial(test_image, model_factors=all_model_factors,
                            pool_shape=pool_shape)
     test_results = pool.map_async(test_partial, [d[0] for d in test_data]).get(9999999)
-    LOG.info("Testing took {} minutes".format((time.clock()-t0)/60))
 
     # Evaluate result
-    correct = 0
-    for test_idx, (winner_idx, _) in enumerate(test_results):
-        correct += int(test_data[test_idx][1]) == winner_idx // len(train_data)
-    print "Total test accuracy = {}".format(float(correct) / len(test_results))
+    correct     = 0
+    captcha     = []    # [(guessed digit, real digit)]
+    captchaList = []
+    for test_i, (winner_i, confidence) in enumerate(test_results):
+        captcha.append((train_data[winner_i][1], (test_data[test_i][1]).upper()))
+        if len(captcha) == 6:
+            # print(captcha)
+            captchaList.append(captcha)
+            captcha = []
+        # print "guess:\t{}\nscore:\t{}\nreal:\t{}\n".format(train_data[winner_i][1], confidence, (test_data[test_i][1]).upper())
+        # if train_data[winner_i][1] == (test_data[test_i][1]).upper():
+        #     correct = correct+1
+    for cap in captchaList:
+        match = True
+        for t in cap:
+            if t[0] == t[1]:
+                continue
+            else:
+                match = False
+                break
+        correct = correct+1 if match else correct
+    print "Tested captchas: {}".format(len(test_data)/6)
+    print "Guessed correct: {}".format(correct)
+    # print "Correctly guessed digits: {0:0.2f}%".format(float(correct)/len(test_data)*100)
+
+
+
+    # for test_idx, (winner_idx, _) in enumerate(test_results):
+        # print test_idx
+        # print winner_idx
+        # print ""
+        # print test_data[test_idx]
+        # correct += int(test_data[test_idx][1]) == winner_idx // len(train_data)
+    # print "Total test accuracy = {}".format(float(correct) / len(test_results))
 
     return all_model_factors, test_results
 
-
-def get_mnist_data_iters(data_dir, train_size, test_size,
-                         full_test_set=False, seed=5):
-    """
-    Load MNIST data.
-
-    Assumed data directory structure:
-        training/
-            0/
-            1/
-            2/
-            ...
-        testing/
-            0/
-            ...
-
-    Parameters
-    ----------
-    train_size, test_size : int
-        MNIST dataset sizes are in increments of 10
-    full_test_set : bool
-        Test on the full MNIST 10k test set.
-    seed : int
-        Random seed used by numpy.random for sampling training set.
-
-    Returns
-    -------
-    train_data, train_data : [(numpy.ndarray, str)]
-        Each item reps a data sample (2-tuple of image and label)
-        Images are numpy.uint8 type [0,255]
-    """
-    if not os.path.isdir(data_dir):
-        raise IOError("Can't find your data dir '{}'".format(data_dir))
-
-    def _load_data(image_dir, num_per_class, get_filenames=False):
-        loaded_data = []
-        for category in sorted(os.listdir(image_dir)):
-            cat_path = os.path.join(image_dir, category)
-            if not os.path.isdir(cat_path) or category.startswith('.'):
-                continue
-            if num_per_class is None:
-                samples = sorted(os.listdir(cat_path))
-            else:
-                samples = np.random.choice(sorted(os.listdir(cat_path)), num_per_class)
-
-            for fname in samples:
-                filepath = os.path.join(cat_path, fname)
-                # Resize and pad the images to (200, 200)
-                image_arr = imresize(imread(filepath), (112, 112))
-                img = np.pad(image_arr,
-                             pad_width=tuple([(p, p) for p in (44, 44)]),
-                             mode='constant', constant_values=0)
-                loaded_data.append((img, category))
-        return loaded_data
-
-    np.random.seed(seed)
-    train_set = _load_data(os.path.join(data_dir, 'training'),
-                           num_per_class=train_size // 10)
-    test_set = _load_data(os.path.join(data_dir, 'testing'),
-                          num_per_class=None if full_test_set else test_size // 10)
-    return train_set, test_set
 
 # returns (traindata, testdata) tuple
 # only works for our cuts and shadowcross folders for now
@@ -165,7 +139,7 @@ def get_botdetect_data_iters(data_dir):
         captchaPath = os.path.join(path, fileName)
         img     = Image.open(captchaPath)
         img     = img.convert('L')                              # grayscale
-        img     = img.point(lambda x: 0 if x<200 else 255, 'L') # map grayscale to black and white
+        img     = img.point(lambda x: 0 if x>200 else 255, 'L') # map grayscale to black and white
         img.save("./test_captcha.bmp")
         pixels  = img.load()
         # crop image to text
@@ -193,11 +167,15 @@ def get_botdetect_data_iters(data_dir):
         # our captchas contain 6 letters
         for i in range(6):
             # different size because our captcha data isn't already padded like the training data
-            sImg = img.crop((symbolWidth*i, 0, symbolWidth*(i+1), img.size[1])).resize((112, 112))
-            padded = Image.new('L', (200, 200), 255)
+            sImg = img.crop((symbolWidth*i-3 if i > 0 else symbolWidth*i, 0, symbolWidth*(i+1)+3, img.size[1])).resize((90, 100), Image.BILINEAR)
+            padded = Image.new('L', (200, 200), 0)
             padded.paste(sImg, (int((padded.size[0]-sImg.size[0])/2), int((padded.size[1]-sImg.size[1])/2))) # insert into center
-            padded.save("./test_letter.bmp")
-            res.append((np.array(padded), fileName[i]))
+            padded.save("./test_letter_{}.bmp".format(fileName[i]))
+            res.append((np.asarray(padded), fileName[i]))
+            sImg.close()
+            padded.close()
+        img.close()
+
         return res
 
     def _load_train_data(image_dir, get_filenames=False):
@@ -214,25 +192,28 @@ def get_botdetect_data_iters(data_dir):
                 # Resize and pad the images to (200, 200)
                 # image_arr = imresize(imread(filepath), (200, 200))
                 # loaded_data.append((image_arr, category))
-
                 img = Image.open(filepath)
                 img = img.convert('L')
-                img = img.point(lambda x: 0 if x<128 else 255, 'L')
-                img = img.resize((200, 200))
-                img.save("./test_training.bmp")
-                loaded_data.append((np.array(img), category))
+                img = img.point(lambda x: 0 if x>128 else 255, 'L')
+                img = img.resize((150, 150), Image.BILINEAR)
+                padded = Image.new('L', (200, 200), 0)
+                padded.paste(img, (int((padded.size[0]-img.size[0])/2), int((padded.size[1]-img.size[1])/2))) # insert into center
+                padded.save("./test_training.bmp")
+                loaded_data.append((np.asarray(padded), category))
+                padded.close()
+                img.close()
         return loaded_data
 
     def _load_test_data(image_dir, get_filenames=False):
         loaded_data = []
         for captchaFile in os.listdir(image_dir):
-            if len(loaded_data) > 5:
+            if len(loaded_data) > 295:
                 break
             samples = _clean_and_split_captcha(image_dir, captchaFile)
 
             for t in samples:
                 loaded_data.append(t)
-        return sorted(loaded_data, key=lambda tup: tup[1])  # sort tuples after symbol/category
+        return loaded_data
 
     train_set = _load_train_data(os.path.join(data_dir, 'training'))
     test_set = _load_test_data(os.path.join(data_dir, 'testing/cut'))
