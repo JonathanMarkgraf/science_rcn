@@ -101,7 +101,7 @@ def run_experiment(data_dir='data/botdetect',
         if len(captcha) == 6:
             captchaList.append(captcha)
             captcha = []
-        # print "guess:\t{}\nscore:\t{}\nreal:\t{}\n".format(train_data[winner_i][1], confidence, (test_data[test_i][1]).upper())
+        print "guess:\t{}\nscore:\t{}\nreal:\t{}\n".format(train_data[winner_i][1], confidence, (test_data[test_i][1]).upper())
         if train_data[winner_i][1] == (test_data[test_i][1]).upper():
             correctDigits = correctDigits+1
     correctCaptchas = 0
@@ -116,7 +116,7 @@ def run_experiment(data_dir='data/botdetect',
         correctCaptchas = correctCaptchas+1 if match else correctCaptchas
     # print test_data
     print "Tested captchas: {}".format(len(test_data)/6)
-    print "Time per captcha: {} seconds".format(t1/(len(test_data)/6))
+    print "Time per captcha: {0:0.2f} seconds".format(t1/(len(test_data)/6))
     print "Digits guessed correct: {0:0.2f}%".format(float(correctDigits)/len(test_data)*100)
     print "Captchas guessed correct: {}".format(correctCaptchas)
 
@@ -175,7 +175,7 @@ def get_botdetect_data_iters(data_dir):
             sImg = sImg.resize((100, 100), Image.BILINEAR)
             padded = Image.new('L', (200, 200), 0)
             padded.paste(sImg, (int((padded.size[0]-sImg.size[0])/2), int((padded.size[1]-sImg.size[1])/2))) # insert into center
-            padded.save("./debug/{}/{}_{}.bmp".format(os.path.splitext(fileName)[0], i, fileName[i]))
+            padded.save("./debug/{}/{}_{}.bmp".format(fname, i, fileName[i]))
             res.append((np.asarray(padded), fileName[i]))
             sImg.close()
             padded.close()
@@ -211,8 +211,8 @@ def get_botdetect_data_iters(data_dir):
     def _load_test_data(image_dir, get_filenames=False):
         loaded_data = []
         for captchaFile in os.listdir(image_dir):
-            # if len(loaded_data) > 295:
-            #     break
+            if len(loaded_data) > 10:
+                break
             samples = _clean_and_split_captcha(image_dir, captchaFile)
 
             for t in samples:
@@ -220,7 +220,7 @@ def get_botdetect_data_iters(data_dir):
         return loaded_data
 
     train_set = _load_train_data(os.path.join(data_dir, 'training'))
-    test_set = _load_test_data(os.path.join(data_dir, 'testing/cross_shadow'))
+    test_set = _load_test_data(os.path.join(data_dir, 'testing/cut'))
     return train_set, test_set
 
 if __name__ == '__main__':
@@ -288,3 +288,76 @@ if __name__ == '__main__':
                    perturb_factor=options.perturb_factor,
                    verbose=options.verbose,
                    parallel=options.parallel)
+
+
+
+
+
+
+
+
+
+
+
+
+
+#####################################################################################
+def splitCaptcha(img):
+    img         = img.convert('L')                              # grayscale
+    img         = img.point(lambda x: 0 if x>200 else 255, 'L') # map grayscale to black and white
+    # crop image to text
+    pixels      = img.load()
+    xStart      = img.size[0]
+    yStart      = None
+    for y in range(img.size[1]):
+        for x in range(img.size[0]):
+            if (pixels[x, y] == 255):
+                xStart = x if x < xStart else xStart
+                yStart = y if yStart is None else yStart
+                break
+    xEnd = 0
+    yEnd = None
+    for y in range(img.size[1]-1, -1, -1):
+        for x in range(img.size[0]-1, -1, -1):
+            if (pixels[x, y] == 255):
+                xEnd = x if x > xEnd else xEnd
+                yEnd = y if yEnd is None else yEnd
+                break
+    img = img.crop((xStart, yStart, xEnd, yEnd))
+    # split symbols
+    res = []
+    symbolWidth = int(img.size[0]/6)
+    captchaLen = 6
+    for i in range(captchaLen):
+        if i == 0:
+            sImg = img.crop((symbolWidth*i, 0, symbolWidth*(i+1)+6, img.size[1]))
+        elif i < captchaLen:
+            sImg = img.crop((symbolWidth*i-3, 0, symbolWidth*(i+1)+3, img.size[1]))
+        else:
+            sImg = img.crop((symbolWidth*i-6, 0, symbolWidth*(i+1), img.size[1]))        
+        sImg = sImg.resize((100, 100), Image.BILINEAR)
+        padded = Image.new('L', (200, 200), 0)
+        padded.paste(sImg, (int((padded.size[0]-sImg.size[0])/2), int((padded.size[1]-sImg.size[1])/2))) # insert into center
+        res.append((np.asarray(padded), ''))
+        sImg.close()
+        padded.close()        
+    img.close()
+    return res
+
+
+# img = PIL Image
+# returns captcha guess as string
+def readCaptcha(img):
+    data = splitCaptcha(img)
+    with open('./trained.pickle', 'rb') as f:
+        all_model_factors = pickle.load(f)        
+    test = partial(test_image, model_factors=all_model_factors)
+    pool = Pool(None)
+    testResults = pool.map_async(test, [d[0] for d in data]).get(9999999)
+
+    # captchaAlphabet = "26abcdefghkmnprstuvxz"
+    captchaAlphabet = "222222666666aaaaaabbbbbbccccccddddddeeeeeeffffffgggggghhhhhhkkkkkkmmmmmmnnnnnnpppppprrrrrrssssssttttttuuuuuuvvvvvvxxxxxxzzzzzz"
+    result = ""
+    for test_i, (winner_i, confidence) in enumerate(testResults):
+        result = result + captchaAlphabet[winner_i]
+    return result
