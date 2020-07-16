@@ -354,6 +354,8 @@ def readCaptcha(img):
     test = partial(test_image, model_factors=all_model_factors)
     pool = Pool(None)
     testResults = pool.map_async(test, [d[0] for d in data]).get(9999999)
+    pool.close()
+    pool.join()
 
     # captchaAlphabet = "26abcdefghkmnprstuvxz"
     captchaAlphabet = "222222666666aaaaaabbbbbbccccccddddddeeeeeeffffffgggggghhhhhhkkkkkkmmmmmmnnnnnnpppppprrrrrrssssssttttttuuuuuuvvvvvvxxxxxxzzzzzz"
